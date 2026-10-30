@@ -16,6 +16,7 @@ from .serializers import (
     serialize_user,
     serialize_donor,
     serialize_matched_donor,
+    serialize_request_candidate,
     serialize_blood_request,
     serialize_donation_drive,
 )
@@ -181,6 +182,21 @@ def donors_list_or_create(request):
 @permission_classes([AllowAny])
 def requests_list_or_create(request):
     if request.method == 'GET':
+        blood_group = (request.query_params.get('bloodGroup') or '').strip()
+        area = (request.query_params.get('area') or '').strip()
+        if blood_group:
+            compatible_groups = COMPATIBLE_DONORS_FOR_RECIPIENT.get(blood_group, [])
+            donors = Donor.objects.filter(
+                blood_group__in=compatible_groups,
+                eligible=True,
+                consent_to_sms=True,
+                opted_out=False,
+                screening_status='clear',
+            ).order_by('created_at')
+            candidates = list(donors)
+            if area:
+                candidates.sort(key=lambda d: (0 if area.lower() in d.location.lower() or d.location.lower() in area.lower() else 1, d.created_at))
+            return Response({"results": [serialize_request_candidate(d) for d in candidates[:20]], "count": len(candidates)})
         search = (request.query_params.get('search') or '').strip()
         status_filter = (request.query_params.get('status') or '').strip()
 
@@ -209,7 +225,10 @@ def requests_list_or_create(request):
     contact_name = (data.get('contactName') or '').strip()
     contact_phone = (data.get('contactPhone') or '').strip()
     blood_group = (data.get('bloodGroup') or '').strip()
-    units_needed = int(data.get('unitsNeeded') or 1)
+    try:
+        units_needed = int(data.get('unitsNeeded') or 1)
+    except (TypeError, ValueError):
+        units_needed = 0
     area = (data.get('area') or '').strip()
     urgency = data.get('urgency') or 'urgent'
     needed_by_raw = data.get('neededBy')
@@ -224,6 +243,10 @@ def requests_list_or_create(request):
         field_errors['bloodGroup'] = 'Blood group is required.'
     if not area:
         field_errors['area'] = 'Area is required.'
+    if units_needed < 1:
+        field_errors['unitsNeeded'] = 'At least one unit is required.'
+    if blood_group not in COMPATIBLE_DONORS_FOR_RECIPIENT:
+        field_errors['bloodGroup'] = 'Select a valid blood group.'
 
     if field_errors:
         return Response(
@@ -292,8 +315,9 @@ def requests_list_or_create(request):
         now = timezone.now()
         for m in created_matches:
             send_blood_alert_to_match(m)
-        blood_req.sms_dispatched_at = now
-        blood_req.status = 'notified'
+        if any(m.sms_status in ('queued', 'sent', 'delivered') for m in created_matches):
+            blood_req.sms_dispatched_at = now
+            blood_req.status = 'notified'
         blood_req.save()
 
     return Response(serialize_blood_request(blood_req), status=status.HTTP_201_CREATED)
@@ -308,15 +332,20 @@ def request_dispatch_alerts(request, req_id):
         return Response({"message": "Blood request not found."}, status=status.HTTP_404_NOT_FOUND)
 
     # Queue/send real SMS alerts to all matched donors
-    matches = blood_req.matched_donors.select_related('donor').all()
+    matches = list(blood_req.matched_donors.select_related('donor').all())
     now = timezone.now()
     for m in matches:
         send_blood_alert_to_match(m)
 
-    blood_req.sms_dispatched_at = now
-    if blood_req.status == 'open':
+    sent_count = sum(1 for match in matches if match.sms_status in ('queued', 'sent', 'delivered'))
+    if sent_count:
+        blood_req.sms_dispatched_at = now
+    if sent_count and blood_req.status == 'open':
         blood_req.status = 'notified'
     blood_req.save()
+
+    if not sent_count:
+        return Response({"message": "No SMS alerts were accepted by the provider. Check backend credentials and donor phone numbers.", "request": serialize_blood_request(blood_req)}, status=status.HTTP_502_BAD_GATEWAY)
 
     return Response(serialize_blood_request(blood_req))
 

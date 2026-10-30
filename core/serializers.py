@@ -59,6 +59,16 @@ def serialize_matched_donor(match):
         "respondedAt": match.responded_at.isoformat() if match.responded_at else None,
     }
 
+def serialize_request_candidate(donor):
+    """Return the contact fields staff need to populate a new request."""
+    return {
+        "id": str(donor.id),
+        "fullName": donor.full_name,
+        "phoneNumber": donor.phone_number,
+        "location": donor.location,
+        "bloodGroup": donor.blood_group,
+    }
+
 def serialize_blood_request(req):
     matches = [serialize_matched_donor(m) for m in req.matched_donors.select_related('donor').all()]
     return {

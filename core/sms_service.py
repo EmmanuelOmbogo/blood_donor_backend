@@ -121,10 +121,10 @@ def send_sms(to_phone: str, message: str) -> dict:
                 status_text = first_recipient.get('status', '').lower()
 
                 # Status codes: 100 (Processed), 101 (Sent), 102 (Queued)
-                if status_code in [100, 101, 102] or 'success' in status_text or 'sent' in status_text:
+                if status_code in [100, 101, 102] or 'success' in status_text or 'sent' in status_text or 'queued' in status_text:
                     return {
                         "success": True,
-                        "status": "delivered" if 'success' in status_text else "sent",
+                        "status": "delivered" if 'success' in status_text else ("queued" if status_code == 102 or 'queued' in status_text else "sent"),
                         "response": res_json,
                         "messageId": first_recipient.get('messageId')
                     }
@@ -182,7 +182,7 @@ def send_blood_alert_to_match(match) -> dict:
     )
 
     result = send_sms(donor.phone_number, message)
-    match.sms_status = result['status']
+    match.sms_status = result['status'] if result.get('success') else 'failed'
     match.save(update_fields=['sms_status'])
 
     return result
