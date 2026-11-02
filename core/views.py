@@ -9,7 +9,7 @@ from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.response import Response
 from rest_framework import status
 
-from .models import User, AuthToken, Donor, BloodRequest, MatchedDonor, DonationDrive
+from .models import User, AuthToken, Donor, BloodRequest, MatchedDonor, DonationDrive, NotificationReadState
 from .authentication import BearerAuthentication
 from .serializers import (
     COMPATIBLE_DONORS_FOR_RECIPIENT,
@@ -95,6 +95,50 @@ def dashboard_summary(request):
         "donorsByBloodGroup": group_counts,
         "recentRequests": recent_requests
     })
+
+@api_view(['GET', 'POST'])
+@authentication_classes([BearerAuthentication])
+@permission_classes([IsAuthenticated])
+def notifications(request):
+    state, _ = NotificationReadState.objects.get_or_create(user=request.user)
+    if request.method == 'POST':
+        state.read_through = timezone.now()
+        state.save(update_fields=['read_through'])
+        return Response({"readThrough": state.read_through.isoformat(), "unreadCount": 0})
+
+    events = []
+    dispatched = BloodRequest.objects.filter(sms_dispatched_at__isnull=False).order_by('-sms_dispatched_at')[:50]
+    for blood_request in dispatched:
+        events.append({
+            "id": f"request:{blood_request.id}",
+            "type": "request_dispatched",
+            "title": f"Alerts sent for {blood_request.reference}",
+            "message": f"{blood_request.blood_group} request at {blood_request.hospital_name} · {blood_request.area}",
+            "createdAt": blood_request.sms_dispatched_at.isoformat(),
+            "requestId": blood_request.id,
+            "reference": blood_request.reference,
+        })
+
+    replies = MatchedDonor.objects.filter(
+        responded_at__isnull=False,
+        response__in=['yes', 'no', 'opted_out'],
+    ).select_related('request', 'donor').order_by('-responded_at')[:100]
+    for match in replies:
+        response_labels = {'yes': 'accepted', 'no': 'declined', 'opted_out': 'opted out of SMS alerts'}
+        events.append({
+            "id": f"reply:{match.id}",
+            "type": "donor_response",
+            "title": f"Donor {response_labels[match.response]}",
+            "message": f"{match.donor.full_name} responded to {match.request.reference}",
+            "createdAt": match.responded_at.isoformat(),
+            "requestId": match.request_id,
+            "reference": match.request.reference,
+        })
+
+    events.sort(key=lambda event: event['createdAt'], reverse=True)
+    events = events[:100]
+    unread_count = sum(1 for event in events if state.read_through is None or datetime.fromisoformat(event['createdAt']) > state.read_through)
+    return Response({"results": events, "unreadCount": unread_count, "readThrough": state.read_through.isoformat() if state.read_through else None})
 
 @api_view(['GET', 'POST'])
 @authentication_classes([BearerAuthentication])

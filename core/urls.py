@@ -5,6 +5,7 @@ urlpatterns = [
     path('auth/login', views.auth_login, name='auth_login'),
     path('auth/me', views.auth_me, name='auth_me'),
     path('dashboard/summary', views.dashboard_summary, name='dashboard_summary'),
+    path('notifications', views.notifications, name='notifications'),
     path('donors', views.donors_list_or_create, name='donors'),
     path('requests', views.requests_list_or_create, name='requests'),
     path('requests/<str:req_id>/alerts', views.request_dispatch_alerts, name='request_dispatch_alerts'),

@@ -55,6 +55,10 @@ class AuthToken(models.Model):
         token_key = uuid.uuid4().hex + uuid.uuid4().hex
         return cls.objects.create(key=token_key, user=user)
 
+class NotificationReadState(models.Model):
+    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='notification_read_state')
+    read_through = models.DateTimeField(null=True, blank=True)
+
 class Donor(models.Model):
     BLOOD_GROUPS = [
         ('A+', 'A+'), ('A-', 'A-'),
