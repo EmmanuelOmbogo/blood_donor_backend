@@ -378,8 +378,7 @@ def request_dispatch_alerts(request, req_id):
     # Queue/send real SMS alerts to all matched donors
     matches = list(blood_req.matched_donors.select_related('donor').all())
     now = timezone.now()
-    for m in matches:
-        send_blood_alert_to_match(m)
+    results = [send_blood_alert_to_match(m) for m in matches]
 
     sent_count = sum(1 for match in matches if match.sms_status in ('queued', 'sent', 'delivered'))
     if sent_count:
@@ -389,7 +388,13 @@ def request_dispatch_alerts(request, req_id):
     blood_req.save()
 
     if not sent_count:
-        return Response({"message": "No SMS alerts were accepted by the provider. Check backend credentials and donor phone numbers.", "request": serialize_blood_request(blood_req)}, status=status.HTTP_502_BAD_GATEWAY)
+        errors = [r.get('error', '') for r in results if isinstance(r, dict)]
+        if errors and all(e.startswith('Connection error') for e in errors):
+            msg = "Could not reach the SMS provider. Check the server's internet connection and try again."
+        else:
+            detail = next((e for e in errors if e), '')
+            msg = "No SMS alerts were accepted by the provider." + (f" {detail}" if detail else "")
+        return Response({"message": msg, "request": serialize_blood_request(blood_req)}, status=status.HTTP_502_BAD_GATEWAY)
 
     return Response(serialize_blood_request(blood_req))
 

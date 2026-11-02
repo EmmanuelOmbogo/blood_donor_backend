@@ -1,6 +1,10 @@
+import json
+import urllib.error
+import urllib.parse
+import urllib.request
+
 import re
 import logging
-import requests
 from django.conf import settings
 from django.utils import timezone
 
@@ -56,6 +60,29 @@ def get_africastalking_config():
         'env': env.strip().lower()
     }
 
+
+class _HttpResult:
+    def __init__(self, status_code, text):
+        self.status_code = status_code
+        self.text = text
+
+    def json(self):
+        return json.loads(self.text)
+
+
+def _post_form(url, data, headers, timeout=15):
+    req = urllib.request.Request(
+        url,
+        data=urllib.parse.urlencode(data).encode(),
+        headers=headers,
+        method='POST',
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return _HttpResult(resp.status, resp.read().decode('utf-8', errors='replace'))
+    except urllib.error.HTTPError as e:  # provider replied with 4xx/5xx
+        return _HttpResult(e.code, e.read().decode('utf-8', errors='replace'))
+
 def send_sms(to_phone: str, message: str) -> dict:
     """
     Sends an SMS using Africa's Talking REST API (Live or Sandbox).
@@ -104,7 +131,7 @@ def send_sms(to_phone: str, message: str) -> dict:
         payload['from'] = config['sender_id']
 
     try:
-        response = requests.post(url, data=payload, headers=headers, timeout=15)
+        response = _post_form(url, payload, headers, timeout=15)
         logger.info(f"Africa's Talking response [{response.status_code}]: {response.text}")
 
         try:
@@ -149,7 +176,7 @@ def send_sms(to_phone: str, message: str) -> dict:
                 "response": res_json
             }
 
-    except requests.exceptions.RequestException as e:
+    except (urllib.error.URLError, TimeoutError, OSError) as e:
         logger.error(f"Failed to connect to Africa's Talking: {e}")
         return {
             "success": False,
